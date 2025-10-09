@@ -1,0 +1,8 @@
+.idea
+
+cmake_install.cmake
+cmake-build-debug
+Makefile
+
+compile-costs.txt
+compile-costs-recompile.txt
