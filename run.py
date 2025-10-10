@@ -27,18 +27,6 @@ class IncludeInfo:
     filename: str
     includees: list["IncludeInfo"]
 
-    # def cut_circular_deps(self, visited: set[str], visited_overall: set[str]):
-    #     visited.add(self.filename)
-    #     visited_overall.add(self.filename)
-    #
-    #     for i in reversed(range(len(self.includees))):
-    #         if self.includees[i].filename in visited:
-    #             self.includees.pop(i)
-    #
-    #     for includee in self.includees:
-    #         if includee.filename not in visited_overall:
-    #             includee.cut_circular_deps(set(visited), visited_overall)
-
     def visit_dfs(self, visited: set[str]):
         visited.add(self.filename)
         for includee in self.includees:
@@ -50,90 +38,6 @@ class IncludeInfo:
 class CompileUnitCosts:
     compile_cost_ns: dict[str, float]
     recompile_cost_b: dict[str, float]
-
-
-# Doesn't include repeated includes :(
-# def include_graph_from_trace_includes(dir: pathlib.Path, head_node_name: str, input_str: str) -> IncludeInfo:
-#     entries: dict[str, IncludeInfo] = dict()
-#     stack: list[tuple[int, IncludeInfo]] = [(0, IncludeInfo(includees=[], filename=head_node_name))]
-#     entries[head_node_name] = stack[0][1]
-#
-#     for line in input_str.strip().splitlines():
-#         depth = line.index(" ")
-#         filename = str((dir / line[depth + 1:].strip()).absolute())
-#
-#         entry = entries.setdefault(filename, IncludeInfo(includees=[], filename=filename))
-#
-#         # Adjust the stack to the current depth
-#         while stack and stack[-1][0] >= depth:
-#             stack.pop()
-#
-#         # Link it in the parent node
-#         stack[-1][1].includees.append(entry)
-#
-#         stack.append((depth, entry))
-#
-#     return stack[0][1]
-
-# Include directives can't easily be resolved :(
-# def include_graph_from_precompile_pass(dir: pathlib.Path, head_node_name: str, input_str: str) -> IncludeInfo:
-#     include_re = re.compile(r'^# (\d+) "(.*?)"(?: (\d+).*)?$')
-#     include_re_incl = re.compile(r'^#include "(.*?)".*$')
-#     head_node_name = str(dir / head_node_name)
-#
-#     entries: dict[str, IncludeInfo] = dict()
-#     stack: list[IncludeInfo] = [IncludeInfo(includees=[], filename=head_node_name)]
-#     entries[head_node_name] = stack[0]
-#
-#     for line in input_str.strip().splitlines():
-#         match = include_re.match(line)
-#         if not match:
-#             match = include_re_incl.match(line)
-#             if not match:
-#                 continue
-#             # Include directive that won't be entered
-#             filename = match.group(1)
-#             if filename.startswith("<"):
-#                 continue # TODO Should properly identify these... somehow
-#
-#             # Include relative to parent?
-#             found = False
-#             for path, path_entry in entries.items():
-#                 if path.endswith(filename.lstrip("./")):
-#                     filename = path
-#                     found = True
-#                     break
-#             if not found:
-#                 continue # Might be included with a step-in later
-#
-#             entry = entries.setdefault(filename, IncludeInfo(includees=[], filename=filename))
-#             stack[-1].includees.append(entry)
-#             continue
-#
-#         # line_num = int(match.group(1))
-#         filename = match.group(2)
-#         if filename.startswith("<"):
-#             continue  # <command line> etc.
-#
-#         filename = str((dir / filename).absolute())
-#         flags = match.group(3)
-#
-#         if flags and '1' in flags:
-#             # Entering a new file
-#             entry = entries.setdefault(filename, IncludeInfo(includees=[], filename=filename))
-#             stack[-1].includees.append(entry)
-#             stack.append(entry)
-#
-#         elif flags and '2' in flags:
-#             # Returning to parent (exit include)
-#             # Pop until we're back in the right file
-#             while stack and stack[-1].filename != filename:
-#                 stack.pop()
-#         else:
-#             # Just a line update or unknown directive; skip
-#             pass
-#
-#     return stack[0]
 
 def include_graph_from_include_tracker(dir: pathlib.Path, head_node_name: str, input_str: str) -> IncludeInfo:
     entries: dict[str, IncludeInfo] = dict()
@@ -221,17 +125,9 @@ def evaluate_compile_entry(idx: int, entry: dict) -> CompileUnitCosts:
 
         tracker_path = pathlib.Path("cmake-build-debug/include-tracker").absolute()
 
-        # TODO Check=false
-        result = subprocess.run([tracker_path, *[f"--extra-arg={arg}" for arg in cmd[1:-1] if arg.startswith("-I")], target_file], cwd=directory, check=False, capture_output=True, text=True)
+        # TODO Check=false currently needed :/
+        result = subprocess.run([tracker_path, *[f"--extra-arg={arg}" for arg in cmd[1:-1]], target_file], cwd=directory, check=False, capture_output=True, text=True)
         head_include_info = include_graph_from_include_tracker(directory, compile_unit_path, result.stdout)
-        # head_include_info.cut_circular_deps(set(), set())
-
-        # result = subprocess.run(cmd + ['-E', '-dI'], cwd=directory, check=True, capture_output=True, text=True)
-        # head_include_info = include_graph_from_precompile_pass(directory, compile_unit_path, result.stdout)
-
-        # result = subprocess.run(cmd + ["--trace-includes"], cwd=directory, check=True, capture_output=True, text=True)
-        # Not sure why but it prints to stderr
-        # head_include_info = include_graph_from_trace_includes(directory, compile_unit_path, result.stderr)
 
         trace_json_path = tmp_dir / "trace.json"
         subprocess.run(cmd + ["-o", tmp_dir / "out.o", "-ftime-trace=" + str(trace_json_path)], cwd=directory, check=True, capture_output=True)
