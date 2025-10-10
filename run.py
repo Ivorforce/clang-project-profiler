@@ -36,8 +36,8 @@ class IncludeInfo:
 
 @dataclasses.dataclass
 class CompileUnitCosts:
-    compile_cost_ns: dict[str, float]
-    recompile_cost_ns: dict[str, float]
+    compile_cost_us: dict[str, float]
+    recompile_cost_us: dict[str, float]
 
 def include_graph_from_include_tracker(dir: pathlib.Path, head_node_name: str, input_str: str) -> IncludeInfo:
     entries: dict[str, IncludeInfo] = dict()
@@ -186,6 +186,12 @@ def evaluate_compile_entry(idx: int, entry: dict) -> CompileUnitCosts:
     # end - start would be a better estimate, but this is good enough
     compile_unit_total_compile_time: float = sum(self_times.values())
 
+    assert(all(t >= 0 for t in self_times.values()))
+    assert(all(t >= 0 for t in deep_times.values()))
+
+    # Should be true, but a lot of precision is lost during computation, so eh.
+    # assert(abs(compile_unit_total_compile_time - deep_times[head_include_info.filename]) < 10000)
+
     if is_internal(head_include_info.filename):
         total_file_size: int = deep_sizes[head_include_info.filename]
         deep_recompile_times: dict[str, float] = {
@@ -202,7 +208,7 @@ def evaluate_compile_entry(idx: int, entry: dict) -> CompileUnitCosts:
     # print(json.dumps(deep_sizes, indent=4))
     # print(json.dumps(deep_recompile_times, indent=4))
 
-    return CompileUnitCosts(compile_cost_ns=deep_times, recompile_cost_ns=deep_recompile_times)
+    return CompileUnitCosts(compile_cost_us=deep_times, recompile_cost_us=deep_recompile_times)
 
 
 def main():
@@ -227,8 +233,8 @@ def main():
     if limit >= 0:
         compile_commands = compile_commands[:limit]
 
-    total_compile_costs: dict[str, float] = {}
-    total_recompile_costs: dict[str, float] = {}
+    total_compile_costs_us: dict[str, float] = {}
+    total_recompile_costs_us: dict[str, float] = {}
 
     failure_count = 0
 
@@ -241,12 +247,12 @@ def main():
     for future in completed:
         try:
             compile_unit_costs: CompileUnitCosts = future.result()
-            for filename, cost in compile_unit_costs.compile_cost_ns.items():
-                total_compile_costs.setdefault(filename, 0)
-                total_compile_costs[filename] += cost
-            for filename, cost in compile_unit_costs.recompile_cost_ns.items():
-                total_recompile_costs.setdefault(filename, 0)
-                total_recompile_costs[filename] += cost
+            for filename, cost in compile_unit_costs.compile_cost_us.items():
+                total_compile_costs_us.setdefault(filename, 0)
+                total_compile_costs_us[filename] += cost
+            for filename, cost in compile_unit_costs.recompile_cost_us.items():
+                total_recompile_costs_us.setdefault(filename, 0)
+                total_recompile_costs_us[filename] += cost
         except:
             failure_count += 1
 
@@ -258,9 +264,9 @@ def main():
         return "\n".join(f"{kv[0]}: {int(kv[1] // 1000 // 1000)}{unit}" for kv in cost_list)
 
     result_path = pathlib.Path("./compile-costs.txt")
-    result_path.write_text(costs_to_string(total_compile_costs, unit="ms"))
+    result_path.write_text(costs_to_string(total_compile_costs_us, unit="s"))
     result_path_internal = pathlib.Path("./compile-costs-recompile.txt")
-    result_path_internal.write_text(costs_to_string(total_recompile_costs, unit="ms"))
+    result_path_internal.write_text(costs_to_string(total_recompile_costs_us, unit="s"))
 
     print(f"Done. {failure_count} object files failed to analyze.")
 
