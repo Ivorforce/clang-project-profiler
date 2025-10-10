@@ -37,7 +37,7 @@ class IncludeInfo:
 @dataclasses.dataclass
 class CompileUnitCosts:
     compile_cost_ns: dict[str, float]
-    recompile_cost_b: dict[str, float]
+    recompile_cost_ns: dict[str, float]
 
 def include_graph_from_include_tracker(dir: pathlib.Path, head_node_name: str, input_str: str) -> IncludeInfo:
     entries: dict[str, IncludeInfo] = dict()
@@ -158,6 +158,8 @@ def evaluate_compile_entry(idx: int, entry: dict) -> CompileUnitCosts:
     # print(json.dumps(deep_includes[head_include_info.filename], indent=2))
 
     total_include_counts: dict[str, int] = deep_includes[head_include_info.filename]
+    # Not included by anything explicitly, just add it so it's iterated.
+    total_include_counts[head_include_info.filename] = 1
 
     deep_times: dict[str, int] = dict()
     deep_sizes: dict[str, int] = dict()
@@ -181,10 +183,26 @@ def evaluate_compile_entry(idx: int, entry: dict) -> CompileUnitCosts:
         if this_is_internal:
             deep_sizes[filename] = deep_file_size
 
+    # end - start would be a better estimate, but this is good enough
+    compile_unit_total_compile_time: float = sum(self_times.values())
+
+    if is_internal(head_include_info.filename):
+        total_file_size: int = deep_sizes[head_include_info.filename]
+        deep_recompile_times: dict[str, float] = {
+            filename: deep_sizes[filename] / total_file_size * compile_unit_total_compile_time for filename, value in deep_sizes.items()
+        }
+         # + 1 to account for floating point inaccuracies
+        assert(v <= compile_unit_total_compile_time + 1 for v in deep_recompile_times.values())
+        assert(abs(deep_recompile_times[head_include_info.filename] - compile_unit_total_compile_time) < 1)
+    else:
+        # Non internal compile units never recompile (unless explicitly updated).
+        deep_recompile_times: dict[str, float] = {}
+
     # print(json.dumps(self_sizes, indent=4))
     # print(json.dumps(deep_sizes, indent=4))
+    # print(json.dumps(deep_recompile_times, indent=4))
 
-    return CompileUnitCosts(compile_cost_ns=deep_times, recompile_cost_b=deep_sizes)
+    return CompileUnitCosts(compile_cost_ns=deep_times, recompile_cost_ns=deep_recompile_times)
 
 
 def main():
@@ -226,7 +244,7 @@ def main():
             for filename, cost in compile_unit_costs.compile_cost_ns.items():
                 total_compile_costs.setdefault(filename, 0)
                 total_compile_costs[filename] += cost
-            for filename, cost in compile_unit_costs.recompile_cost_b.items():
+            for filename, cost in compile_unit_costs.recompile_cost_ns.items():
                 total_recompile_costs.setdefault(filename, 0)
                 total_recompile_costs[filename] += cost
         except:
@@ -242,7 +260,7 @@ def main():
     result_path = pathlib.Path("./compile-costs.txt")
     result_path.write_text(costs_to_string(total_compile_costs, unit="ms"))
     result_path_internal = pathlib.Path("./compile-costs-recompile.txt")
-    result_path_internal.write_text(costs_to_string(total_recompile_costs, unit="mb"))
+    result_path_internal.write_text(costs_to_string(total_recompile_costs, unit="ms"))
 
     print(f"Done. {failure_count} object files failed to analyze.")
 
