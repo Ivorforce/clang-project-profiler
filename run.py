@@ -5,6 +5,7 @@ import json
 import subprocess
 import os
 import sys
+import math
 import pathlib
 import shlex
 
@@ -26,6 +27,10 @@ arg_parser.add_argument('--limit', required=False, default=-1, type=int)
 class IncludeInfo:
     filename: str
     includees: list["IncludeInfo"]
+    explicit_include_count: int
+
+    deep_include_weights: dict["IncludeInfo", float] = dataclasses.field(default=dict)
+    self_size: int = 0
 
     def visit_dfs(self, visited: set[str]):
         visited.add(self.filename)
@@ -34,12 +39,18 @@ class IncludeInfo:
                 yield from includee.visit_dfs(visited)
         yield self
 
+    def __eq__(self, other):
+        return isinstance(other, IncludeInfo) and self.filename == other.filename
+
+    def __hash__(self):
+        return hash(self.filename)
+
 @dataclasses.dataclass
 class CompileUnitCosts:
     compile_cost_us: dict[str, float]
     recompile_cost_us: dict[str, float]
 
-def include_graph_from_include_tracker(dir: pathlib.Path, head_node_name: str, input_str: str) -> IncludeInfo:
+def include_graph_from_include_tracker(input_str: str) -> dict[str, IncludeInfo]:
     entries: dict[str, IncludeInfo] = dict()
 
     for line in input_str.strip().splitlines():
@@ -50,16 +61,18 @@ def include_graph_from_include_tracker(dir: pathlib.Path, head_node_name: str, i
         filename = str(pathlib.Path(filename).absolute())
         includer_filename = str(pathlib.Path(includer_filename).absolute())
 
-        entry = entries.setdefault(filename, IncludeInfo(includees=[], filename=filename))
-        includer_entry = entries.setdefault(includer_filename, IncludeInfo(includees=[], filename=includer_filename))
+        entry = entries.setdefault(filename, IncludeInfo(includees=[], filename=filename, explicit_include_count=0))
+        includer_entry = entries.setdefault(includer_filename, IncludeInfo(includees=[], filename=includer_filename, explicit_include_count=0))
 
-        assert(entry != includer_entry)
+        assert (entry != includer_entry)
+
+        entry.explicit_include_count += 1
 
         if all(i != entry for i in includer_entry.includees):
             # Might be included multiple times
             includer_entry.includees.append(entry)
 
-    return entries[str(dir / head_node_name)]
+    return entries
 
 def self_times_from_time_trace_file(path, dir: pathlib.Path) -> dict[str, int]:
     # TODO Find compile unit self time somehow
@@ -127,14 +140,13 @@ def evaluate_compile_entry(idx: int, entry: dict) -> CompileUnitCosts:
 
         # TODO Check=false currently needed :/
         result = subprocess.run([tracker_path, *[f"--extra-arg={arg}" for arg in cmd[1:-1]], target_file], cwd=directory, check=False, capture_output=True, text=True)
-        head_include_info = include_graph_from_include_tracker(directory, compile_unit_path, result.stdout)
+        files_by_name: dict[str, IncludeInfo] = include_graph_from_include_tracker(result.stdout)
 
         trace_json_path = tmp_dir / "trace.json"
         subprocess.run(cmd + ["-o", tmp_dir / "out.o", "-ftime-trace=" + str(trace_json_path)], cwd=directory, check=True, capture_output=True)
         self_times = self_times_from_time_trace_file(trace_json_path, dir=directory)
 
-    deep_includes: dict[str, dict[str, int]] = dict()
-    self_sizes: dict[str, int] = dict()
+    head_include_info = files_by_name[str(directory / compile_unit_path)]
 
     directory_str = str(directory)
 
@@ -145,61 +157,71 @@ def evaluate_compile_entry(idx: int, entry: dict) -> CompileUnitCosts:
     # Visit deep nodes first, so that the deep includees are available when the parent is evaluating.
     for include_info in head_include_info.visit_dfs(set()):
         if is_internal(include_info.filename):
-            self_sizes[include_info.filename] = (directory / include_info.filename).stat().st_size
+            include_info.self_size = (directory / include_info.filename).stat().st_size
 
-        deep_includes_this = deep_includes[include_info.filename] = dict()
-        for includee in include_info.includees:
-            deep_includes_this[includee.filename] = 1
+        include_info.deep_include_weights = {include_info: 0.0}
 
         for includee in include_info.includees:
-            for grandchild_includee, grandchild_include_count in deep_includes[includee.filename].items():
-                deep_includes_this[grandchild_includee] = grandchild_include_count + deep_includes_this.get(grandchild_includee, 0)
+            include_info.deep_include_weights.update(includee.deep_include_weights)
 
-    # print(json.dumps(deep_includes[head_include_info.filename], indent=2))
+    assert (set(files_by_name.values()) == set(head_include_info.deep_include_weights))
 
-    total_include_counts: dict[str, int] = deep_includes[head_include_info.filename]
-    # Not included by anything explicitly, just add it so it's iterated.
-    total_include_counts[head_include_info.filename] = 1
+    next = [head_include_info]
+    head_include_info.deep_include_weights = {key: 1.0 for key in head_include_info.deep_include_weights}
 
-    deep_times: dict[str, int] = dict()
-    deep_sizes: dict[str, int] = dict()
+    while next:
+        include_info = next.pop()
+        counts_by_includee: dict[IncludeInfo, int] = {filename: 0 for filename in include_info.deep_include_weights}
 
-    # Attribute as much of the includee to us as how many includes are caused by us.
-    for filename, include_count in total_include_counts.items():
-        # We weigh our own cost to ourselves as 1.
-        deep_time = self_times.get(filename, 0)
-        deep_file_size = self_sizes.get(filename, 0)
-        this_is_internal = is_internal(filename)
+        for includee in include_info.includees:
+            for deep_include in includee.deep_include_weights:
+                counts_by_includee[deep_include] += 1
 
-        for includee, includee_count in deep_includes[filename].items():
-            weight = include_count * includee_count / total_include_counts[includee]
-            assert(1 >= weight > 0)
+        for includee in include_info.includees:
+            for deep_include in includee.deep_include_weights:
+                # Add weights
+                includee.deep_include_weights[deep_include] += include_info.deep_include_weights[deep_include] / counts_by_includee[deep_include]
 
-            deep_time += self_times.get(includee, 0) * weight
-            if this_is_internal and is_internal(includee):
-                deep_file_size += self_sizes.get(includee, 0) * weight
+            includee.explicit_include_count -= 1
+            if includee.explicit_include_count == 0:
+                next.append(includee)
 
-        deep_times[filename] = deep_time
-        if this_is_internal:
-            deep_sizes[filename] = deep_file_size
+    for include_info in files_by_name.values():
+        if include_info.explicit_include_count != 0:
+            # TODO Some system headers seem to be circular or something? But we don't need to be super precise with them.
+            assert not is_internal(include_info.filename), include_info.filename
+            include_info.deep_include_weights[include_info] = 1
+            include_info.explicit_include_count = 0
+
+    # print(list(include_info.filename for include_info in files_by_name.values() if include_info.explicit_include_count != 0))
+    assert all(include_info.explicit_include_count == 0 for include_info in files_by_name.values())
+    # print(list((include_info.filename, include_info.deep_include_weights[include_info]) for include_info in files_by_name.values()))
+    assert all(math.isclose(include_info.deep_include_weights[include_info], 1) for include_info in files_by_name.values())
+
+    # print(json.dumps(list(deep_includes[head_include_info.filename]), indent=2))
 
     # end - start would be a better estimate, but this is good enough
     compile_unit_total_compile_time: float = sum(self_times.values())
 
-    assert(all(t >= 0 for t in self_times.values()))
-    assert(all(t >= 0 for t in deep_times.values()))
-
-    # Should be true, but a lot of precision is lost during computation, so eh.
-    # assert(abs(compile_unit_total_compile_time - deep_times[head_include_info.filename]) < 10000)
-
+    deep_times: dict[str, int] = {
+        include_info.filename: sum(
+            self_times.get(includee.filename, 0) * weight
+            for includee, weight in include_info.deep_include_weights.items()
+        )
+        for include_info in files_by_name.values()
+    }
     if is_internal(head_include_info.filename):
-        total_file_size: int = deep_sizes[head_include_info.filename]
+        total_file_size: int = sum(include_info.self_size for include_info in files_by_name.values())
         deep_recompile_times: dict[str, float] = {
-            filename: deep_sizes[filename] / total_file_size * compile_unit_total_compile_time for filename, value in deep_sizes.items()
+            include_info.filename: sum(
+                includee.self_size * weight
+                for includee, weight in include_info.deep_include_weights.items()
+            ) / total_file_size * compile_unit_total_compile_time
+            for include_info in files_by_name.values()
         }
-         # + 1 to account for floating point inaccuracies
-        assert(v <= compile_unit_total_compile_time + 1 for v in deep_recompile_times.values())
-        assert(abs(deep_recompile_times[head_include_info.filename] - compile_unit_total_compile_time) < 1)
+        # + 1 to account for floating point inaccuracies
+        assert (v <= compile_unit_total_compile_time + 1 for v in deep_recompile_times.values())
+        assert (abs(deep_recompile_times[head_include_info.filename] - compile_unit_total_compile_time) < 1)
     else:
         # Non internal compile units never recompile (unless explicitly updated).
         deep_recompile_times: dict[str, float] = {}
