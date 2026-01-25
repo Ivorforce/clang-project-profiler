@@ -22,7 +22,7 @@ arg_parser = argparse.ArgumentParser(
 
 arg_parser.add_argument('--input', required=False, default="compile_commands.json")
 arg_parser.add_argument('--limit', required=False, default=-1, type=int)
-arg_parser.add_argument('--try_one', action='store_true')
+arg_parser.add_argument('--sync', action='store_true')
 
 @dataclasses.dataclass
 class IncludeInfo:
@@ -249,10 +249,6 @@ def main():
 
     print(f"Starting {len(compile_commands)} commands...")
 
-    if args.try_one:
-        evaluate_compile_entry(0, compile_commands[0])
-        exit(0)
-
     if limit >= 0:
         compile_commands = compile_commands[:limit]
 
@@ -261,23 +257,29 @@ def main():
 
     failure_count = 0
 
-    executor = concurrent.futures.ProcessPoolExecutor(multiprocessing.cpu_count())
-    futures = [executor.submit(evaluate_compile_entry, *item) for item in enumerate(compile_commands)]
-    completed, not_completed = concurrent.futures.wait(futures)
+    def add_result(costs: CompileUnitCosts):
+        for filename, cost in costs.compile_cost_us.items():
+            total_compile_costs_us.setdefault(filename, 0)
+            total_compile_costs_us[filename] += cost
+        for filename, cost in costs.recompile_cost_us.items():
+            total_recompile_costs_us.setdefault(filename, 0)
+            total_recompile_costs_us[filename] += cost
 
-    print(f"Fetching results...")
+    if args.sync:
+        for (i, cmd) in enumerate(compile_commands):
+            add_result(evaluate_compile_entry(i, cmd))
+    else:
+        executor = concurrent.futures.ProcessPoolExecutor(multiprocessing.cpu_count())
+        futures = [executor.submit(evaluate_compile_entry, *item) for item in enumerate(compile_commands)]
+        completed, not_completed = concurrent.futures.wait(futures)
 
-    for future in completed:
-        try:
-            compile_unit_costs: CompileUnitCosts = future.result()
-            for filename, cost in compile_unit_costs.compile_cost_us.items():
-                total_compile_costs_us.setdefault(filename, 0)
-                total_compile_costs_us[filename] += cost
-            for filename, cost in compile_unit_costs.recompile_cost_us.items():
-                total_recompile_costs_us.setdefault(filename, 0)
-                total_recompile_costs_us[filename] += cost
-        except:
-            failure_count += 1
+        print(f"Fetching results...")
+
+        for future in completed:
+            try:
+                add_result(future.result())
+            except:
+                failure_count += 1
 
     print(f"Combining results...")
 
