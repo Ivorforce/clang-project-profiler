@@ -22,6 +22,7 @@ arg_parser = argparse.ArgumentParser(
 
 arg_parser.add_argument('--input', required=False, default="compile_commands.json")
 arg_parser.add_argument('--limit', required=False, default=-1, type=int)
+arg_parser.add_argument('--try_one', action='store_true')
 
 @dataclasses.dataclass
 class IncludeInfo:
@@ -248,9 +249,9 @@ def main():
 
     print(f"Starting {len(compile_commands)} commands...")
 
-    # Test one to ensure that it runs properly.
-    # evaluate_compile_entry(0, compile_commands[600])
-    # exit(0)
+    if args.try_one:
+        evaluate_compile_entry(0, compile_commands[0])
+        exit(0)
 
     if limit >= 0:
         compile_commands = compile_commands[:limit]

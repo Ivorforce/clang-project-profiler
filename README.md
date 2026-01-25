@@ -20,6 +20,8 @@ Then, run the python script:
 
 ```shell
 # To test it's running correctly.
+python run.py --input <path/to/compile_commands.json> --try_one
+# To test it's producing statistics as expected.
 python run.py --input <path/to/compile_commands.json> --limit 100
 python run.py --input <path/to/compile_commands.json>
 ```
