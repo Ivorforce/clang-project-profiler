@@ -135,7 +135,7 @@ def evaluate_compile_entry(idx: int, entry: dict) -> CompileUnitCosts:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_dir = pathlib.Path(tmp_dir)
         target_file = cmd[-1]
-        cmd = cmd[:o_idx] + ["-Wno-everything"] + cmd[o_idx + 1:]
+        cmd = cmd[:o_idx] + ["-Wno-everything"] + cmd[o_idx + 2:]
 
         tracker_path = pathlib.Path("cmake-build-debug/include-tracker").absolute()
 
