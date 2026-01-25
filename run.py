@@ -267,7 +267,13 @@ def main():
 
     if args.sync:
         for (i, cmd) in enumerate(compile_commands):
-            add_result(evaluate_compile_entry(i, cmd))
+            try:
+                add_result(evaluate_compile_entry(i, cmd))
+            except Exception as e:
+                directory = pathlib.Path(cmd.get("directory", os.getcwd()))
+                print(f"Command {i} failed with {type(e)}:")
+                print(f"cd \"{directory}\" && " + cmd["command"])
+                failure_count += 1
     else:
         executor = concurrent.futures.ProcessPoolExecutor(multiprocessing.cpu_count())
         futures = [executor.submit(evaluate_compile_entry, *item) for item in enumerate(compile_commands)]
