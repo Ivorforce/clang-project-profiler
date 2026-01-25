@@ -140,12 +140,17 @@ def evaluate_compile_entry(idx: int, entry: dict) -> CompileUnitCosts:
         tracker_path = pathlib.Path("cmake-build-debug/include-tracker").absolute()
 
         # TODO Check=false currently needed :/
-        result = subprocess.run([tracker_path, *[f"--extra-arg={arg}" for arg in cmd[1:-1]], target_file], cwd=directory, check=False, capture_output=True, text=True)
-        files_by_name: dict[str, IncludeInfo] = include_graph_from_include_tracker(result.stdout)
+        try:
+            result = subprocess.run([tracker_path, *[f"--extra-arg={arg}" for arg in cmd[1:-1]], target_file], cwd=directory, check=False, capture_output=True, text=True)
+            files_by_name: dict[str, IncludeInfo] = include_graph_from_include_tracker(result.stdout)
 
-        trace_json_path = tmp_dir / "trace.json"
-        subprocess.run(cmd + ["-o", tmp_dir / "out.o", "-ftime-trace=" + str(trace_json_path)], cwd=directory, check=True, capture_output=True)
-        self_times = self_times_from_time_trace_file(trace_json_path, dir=directory)
+            trace_json_path = tmp_dir / "trace.json"
+            subprocess.run(cmd + ["-o", tmp_dir / "out.o", "-ftime-trace=" + str(trace_json_path)], cwd=directory, check=True, capture_output=True)
+            self_times = self_times_from_time_trace_file(trace_json_path, dir=directory)
+        except Exception as e:
+            cmd_line = " ".join(cmd)
+            cmd_line = f"cd \"{directory}\" && {cmd_line}"
+            raise RuntimeError(f"Command failed:\n{cmd_line}")
 
     head_include_info = files_by_name[str(directory / compile_unit_path)]
 
@@ -270,9 +275,7 @@ def main():
             try:
                 add_result(evaluate_compile_entry(i, cmd))
             except Exception as e:
-                directory = pathlib.Path(cmd.get("directory", os.getcwd()))
-                print(f"Command {i} failed with {type(e)}:")
-                print(f"cd \"{directory}\" && " + cmd["command"])
+                print(e)
                 failure_count += 1
     else:
         executor = concurrent.futures.ProcessPoolExecutor(multiprocessing.cpu_count())
