@@ -17,9 +17,9 @@ import argparse
 import re
 
 arg_parser = argparse.ArgumentParser(
-    description='What the program does',
-    epilog='Text at the bottom of help')
+    description='Utility to track include dependencies in C++')
 
+arg_parser.add_argument('--tracker', required=False, default="include-tracker")
 arg_parser.add_argument('--input', required=False, default="compile_commands.json")
 arg_parser.add_argument('--limit', required=False, default=-1, type=int)
 arg_parser.add_argument('--sync', action='store_true')
@@ -112,7 +112,7 @@ def self_times_from_time_trace_file(path, dir: pathlib.Path) -> dict[str, int]:
 
     return self_times
 
-def evaluate_compile_entry(idx: int, entry: dict) -> CompileUnitCosts:
+def evaluate_compile_entry(idx: int, entry: dict, tracker_path: str) -> CompileUnitCosts:
     directory = pathlib.Path(entry.get("directory", os.getcwd()))
     command = entry.get("command")
     arguments = entry.get("arguments")
@@ -137,8 +137,6 @@ def evaluate_compile_entry(idx: int, entry: dict) -> CompileUnitCosts:
         target_file = cmd[-1]
         cmd = cmd[:o_idx] + ["-Wno-everything"] + cmd[o_idx + 2:]
 
-        tracker_path = pathlib.Path("cmake-build-debug/include-tracker").absolute()
-
         # TODO Check=false currently needed :/
         try:
             result = subprocess.run([tracker_path, *[f"--extra-arg={arg}" for arg in cmd[1:-1]], target_file], cwd=directory, check=False, capture_output=True, text=True)
@@ -150,7 +148,7 @@ def evaluate_compile_entry(idx: int, entry: dict) -> CompileUnitCosts:
         except Exception as e:
             cmd_line = " ".join(cmd)
             cmd_line = f"cd \"{directory}\" && {cmd_line}"
-            raise RuntimeError(f"Command failed:\n{cmd_line}")
+            raise RuntimeError(f"Command failed:\n{cmd_line}\n{e}")
 
     head_include_info = files_by_name[str(directory / compile_unit_path)]
 
@@ -241,8 +239,14 @@ def evaluate_compile_entry(idx: int, entry: dict) -> CompileUnitCosts:
 
 def main():
     args = arg_parser.parse_args()
+    tracker_path = pathlib.Path(args.tracker).absolute()
     input_filename = args.input
     limit = args.limit
+
+    # Validate tracker path
+    if not tracker_path.is_file():
+        print(f"Couldn't find `include-tracker` binary at path '{args.tracker}'. Specify a path with `--tracker`.")
+        sys.exit(1)
 
     # Read the compile_commands.json file
     try:
@@ -273,13 +277,13 @@ def main():
     if args.sync:
         for (i, cmd) in enumerate(compile_commands):
             try:
-                add_result(evaluate_compile_entry(i, cmd))
+                add_result(evaluate_compile_entry(i, cmd, tracker_path))
             except Exception as e:
                 print(e)
                 failure_count += 1
     else:
         executor = concurrent.futures.ProcessPoolExecutor(multiprocessing.cpu_count())
-        futures = [executor.submit(evaluate_compile_entry, *item) for item in enumerate(compile_commands)]
+        futures = [executor.submit(evaluate_compile_entry, *item, tracker_path) for item in enumerate(compile_commands)]
         completed, not_completed = concurrent.futures.wait(futures)
 
         print(f"Fetching results...")

@@ -11,11 +11,19 @@ add_definitions(${LLVM_DEFINITIONS})
 
 add_executable(include-tracker main.cpp)
 
-target_link_libraries(include-tracker
-        PRIVATE
-        clangTooling
-        clangBasic
-        clangFrontend
-        clangLex
-        clangAST
-)
+if (APPLE)
+  target_link_libraries(include-tracker
+    PRIVATE
+    clangTooling
+    clangBasic
+    clangFrontend
+    clangLex
+    clangAST
+  )
+else()
+  target_link_libraries(include-tracker
+    PRIVATE
+    clang-cpp
+    LLVM
+  )
+endif()
