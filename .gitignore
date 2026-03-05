@@ -2,7 +2,10 @@
 
 cmake_install.cmake
 cmake-build-debug
+CMakeCache.txt
+CMakeFiles/
 Makefile
+include-tracker
 
 compile-costs.txt
 compile-costs-recompile.txt
