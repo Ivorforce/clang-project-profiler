@@ -19,7 +19,10 @@ import re
 arg_parser = argparse.ArgumentParser(
     description='Utility to track include dependencies in C++')
 
-arg_parser.add_argument('--tracker', required=False, default="include-tracker")
+arg_parser.add_argument('--tracker', required=False, default=None)
+
+# Tried in order when --tracker isn't given: in-tree build, then CLion's default build directory.
+DEFAULT_TRACKER_PATHS = ["include-tracker", "cmake-build-debug/include-tracker"]
 arg_parser.add_argument('--input', required=False, default="compile_commands.json")
 arg_parser.add_argument('--limit', required=False, default=-1, type=int)
 arg_parser.add_argument('--sync', action='store_true')
@@ -241,13 +244,14 @@ def evaluate_compile_entry(idx: int, entry: dict, tracker_path: str) -> CompileU
 
 def main():
     args = arg_parser.parse_args()
-    tracker_path = pathlib.Path(args.tracker).absolute()
+    tracker_candidates = [args.tracker] if args.tracker else DEFAULT_TRACKER_PATHS
+    tracker_path = next((pathlib.Path(p).absolute() for p in tracker_candidates if pathlib.Path(p).is_file()), None)
     input_filename = args.input
     limit = args.limit
 
     # Validate tracker path
-    if not tracker_path.is_file():
-        print(f"Couldn't find `include-tracker` binary at path '{args.tracker}'. Specify a path with `--tracker`.")
+    if tracker_path is None:
+        print(f"Couldn't find `include-tracker` binary at {' or '.join(repr(p) for p in tracker_candidates)}. Specify a path with `--tracker`.")
         sys.exit(1)
 
     # Read the compile_commands.json file
