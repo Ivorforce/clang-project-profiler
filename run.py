@@ -140,6 +140,8 @@ def evaluate_compile_entry(idx: int, entry: dict, tracker_path: str) -> CompileU
         # TODO Check=false currently needed :/
         try:
             result = subprocess.run([tracker_path, *[f"--extra-arg={arg}" for arg in cmd[1:-1]], target_file], cwd=directory, check=False, capture_output=True, text=True)
+            if result.returncode != 0 and not result.stdout.strip():
+                raise RuntimeError(f"include-tracker failed with exit code {result.returncode}:\n{result.stderr.strip()}")
             files_by_name: dict[str, IncludeInfo] = include_graph_from_include_tracker(result.stdout)
 
             trace_json_path = tmp_dir / "trace.json"
@@ -148,7 +150,7 @@ def evaluate_compile_entry(idx: int, entry: dict, tracker_path: str) -> CompileU
         except Exception as e:
             cmd_line = " ".join(cmd)
             cmd_line = f"cd \"{directory}\" && {cmd_line}"
-            raise RuntimeError(f"Command failed:\n{cmd_line}\n{e}")
+            raise RuntimeError(f"Command failed:\n{cmd_line}\n{e}") from e
 
     head_include_info = files_by_name[str(directory / compile_unit_path)]
 
