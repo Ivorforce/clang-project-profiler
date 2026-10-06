@@ -8,6 +8,7 @@ import sys
 import math
 import pathlib
 import shlex
+import platform
 
 import concurrent.futures
 import multiprocessing
@@ -115,6 +116,27 @@ def self_times_from_time_trace_file(path, dir: pathlib.Path) -> dict[str, int]:
 
     return self_times
 
+def keep_single_arch(cmd: list[str]) -> list[str]:
+    # Multiple -arch flags (macOS universal builds) make the driver plan one compile job per arch,
+    # which the include tracker rejects and which would double the measured compile time.
+    archs = [cmd[i + 1] for i, arg in enumerate(cmd[:-1]) if arg == "-arch"]
+    if len(archs) <= 1:
+        return cmd
+
+    keep = platform.machine() if platform.machine() in archs else archs[0]
+    result = []
+    i = 0
+    while i < len(cmd):
+        if cmd[i] == "-arch" and i + 1 < len(cmd):
+            if cmd[i + 1] == keep and keep is not None:
+                result += ["-arch", keep]
+                keep = None
+            i += 2
+        else:
+            result.append(cmd[i])
+            i += 1
+    return result
+
 def evaluate_compile_entry(idx: int, entry: dict, tracker_path: str) -> CompileUnitCosts:
     directory = pathlib.Path(entry.get("directory", os.getcwd()))
     command = entry.get("command")
@@ -125,6 +147,7 @@ def evaluate_compile_entry(idx: int, entry: dict, tracker_path: str) -> CompileU
         cmd = arguments
     else:
         cmd = shlex.split(command)
+    cmd = keep_single_arch(cmd)
 
     compile_unit_path = cmd[-1]
 
@@ -142,7 +165,7 @@ def evaluate_compile_entry(idx: int, entry: dict, tracker_path: str) -> CompileU
 
         # TODO Check=false currently needed :/
         try:
-            result = subprocess.run([tracker_path, *[f"--extra-arg={arg}" for arg in cmd[1:-1]], target_file], cwd=directory, check=False, capture_output=True, text=True)
+            result = subprocess.run([tracker_path, target_file, "--", *cmd[1:-1]], cwd=directory, check=False, capture_output=True, text=True)
             if result.returncode != 0 and not result.stdout.strip():
                 raise RuntimeError(f"include-tracker failed with exit code {result.returncode}:\n{result.stderr.strip()}")
             files_by_name: dict[str, IncludeInfo] = include_graph_from_include_tracker(result.stdout)
